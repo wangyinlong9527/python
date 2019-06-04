@@ -1,0 +1,867 @@
+#!/bin/bash
+
+env_path=$(cd `dirname $0`; pwd)
+
+source ${env_path}/bi.conf
+
+install_list=(
+ 1.环境检查
+ 2.BI后端安装包解压
+ 3.BI前端解安装包解压
+ 4.BI-AI安装包解压
+ 5.初始化数据库,需先执行2,3,4步
+ 6.修改配置文件
+ 7.启动服务
+)
+
+
+
+#1 步骤输出 紫色
+#2 正确输出 绿色
+#3 错误输出 红色
+#4 提示输出 蓝色
+#5 警告输出 黄色
+#根据不同的颜色打印出提示信息
+function echo_fun(){
+  if [ $# -ge 2 ];then
+      params_num=$1
+      shift 1
+      params_mes=$@
+  else
+      echo_fun 3 请至少输入两个参数 echo_fun ..
+      exit
+  fi
+  case $params_num in
+        1)
+        echo -e "\n\033[35;40;1m ****************************** ${params_mes} ******************************\033[0m\r\n"
+        ;;
+        2)
+        echo -e "\033[32;40;1m ${params_mes}\033[0m\r\n"
+        ;;
+        3)
+        echo -e "\n\033[31;40;1m ${params_mes}\033[0m\r\n"
+        ;;
+        4)
+        echo -e "\033[36;40;1m ${params_mes}\033[0m\r\n"
+        ;;
+        5)
+        echo -e "\033[33;40;1m ${params_mes} \033[0m\r\n"
+        ;;
+        *)
+        echo_fun 3 参数异常第一个参数应为1,2,3,4,5
+        ;;
+   esac
+}
+
+
+function echo_list(){
+   
+    echo_fun 5 安装目录如下,请选择安装步骤:
+    for (( i=0;i<${#install_list[@]};i++ ))
+    do
+      echo_fun 4 ${install_list[i]}
+    done
+}
+
+ 
+function yn_install(){
+  
+   read -p "选择安装项[1-7]: " num
+   case $num in
+        1)
+        echo_fun 1  ${install_list[0]}
+        step_fun_1
+        ;;
+        2)
+        echo_fun 1  ${install_list[1]}
+        step_fun_2
+        ;;
+        3)
+        echo_fun 1  ${install_list[2]}
+        step_fun_3
+        ;;
+        4)
+        echo_fun 1  ${install_list[3]}
+        step_fun_4
+        ;;
+        5)
+        echo_fun 1  ${install_list[4]}
+        step_fun_5
+        ;;
+        6)
+        echo_fun 1  ${install_list[5]}
+        step_fun_6
+        ;;
+        7)
+        echo_fun 1  ${install_list[6]}
+        step_fun_7
+        ;;
+        *)
+        echo_fun 3 数字应该在1-7之间
+        yn_install
+        ;;
+   esac
+}
+
+
+function order_is_ok(){
+
+   if [ $1 -ne 0 ];then
+        exit
+   fi
+}
+
+
+
+
+
+function check_package(){
+ 
+     echo_fun 4 检查当前机器上的 $1 是否存在
+     package_num=`rpm -qa|grep $1|wc -l`
+     is_ok_num=$?
+     order_is_ok ${is_ok_num}
+
+
+    if [ ${package_num} -ge 1 ]; then
+        echo_fun 2 "当前机器上的 $1 已经安装"
+    else
+        echo_fun 3 "当前机器上的 $1 未安装,需要安装"
+        cd ${env_path}/rpm
+        yum localinstall -y $1*.rpm
+        is_ok_num=$?
+        order_is_ok ${is_ok_num}
+
+    fi
+}
+
+
+
+
+#检查bi的部署用户是否存在
+function check_exist_user(){
+  
+   echo_fun 4 检查当前机器上的 $1 用户是否存在
+   num_user=0
+   num_user=`cat /etc/passwd|grep -w $1|wc -l`
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+  
+   if [ ${num_user} -ge 1 ];then
+       echo_fun 2 当前机器 $1 用户已经存在,无需创建
+       sleep 3s
+   else
+       echo_fun 4  当前机器 $1 用户不存在,添加用户并设置密码
+       useradd -d /home/$1 $1
+       expect -c"
+         spawn passwd $1
+         expect {
+               \"*yes/no*\" {send \"yes\r\";exp_continue}
+               \"*New password:*\" {send \"$2\r\";exp_continue}
+               \"*Retype new password:*\" {send \"$2\r\";exp_continue}
+               }"
+    fi
+    echo -e '\n'
+}
+
+
+
+#检查mysql是否安装和启动
+function check_mysql(){
+
+    echo_fun 4 检查当前机器上 MySQL 数据库是否安装和启动
+    mysql_pid=0
+    mysql_pid=`ps -ef |grep -w $1|grep -v grep|wc -l`
+    is_ok_num=$?
+    order_is_ok ${is_ok_num}
+    
+    if [ ${mysql_pid} -lt 1 ]; then
+       echo_fun 3 "\n 请启动或者安装MySQL !"
+       exit
+    else
+      echo_fun 2 "MySQL 已经安装并启动."
+
+      echo_fun 4 检查MySQL数据库的字符集是否为utf8
+      sleep 3s
+      export MYSQL_PWD=${mysql_password}
+      character_set_client=`mysql  -u${mysql_user}  -e "show variables like 'character_set%'" |grep character_set_client|awk -F " " '{print $2}'`
+      check_mysql_character character_set_client ${character_set_client}
+
+      character_set_connection=`mysql  -u${mysql_user}  -e "show variables like 'character_set%'" |grep character_set_connection|awk -F " " '{print $2}'`
+      check_mysql_character character_set_connection ${character_set_connection}
+
+      character_set_database=`mysql  -u${mysql_user}  -e "show variables like 'character_set%'" |grep character_set_database|awk -F " " '{print $2}'`
+      #check_mysql_character character_set_database ${character_set_database}
+
+      character_set_results=`mysql  -u${mysql_user}  -e "show variables like 'character_set%'" |grep character_set_results|awk -F " " '{print $2}'`
+      check_mysql_character character_set_results ${character_set_results}
+
+    fi
+}
+
+function check_mysql_character(){
+
+   if [ "utf8*"x = "$2*"x ];then
+     echo_fun 2 "$1 字符集为 ${character_set_client}"
+     sleep 3s
+   else
+     echo_fun 3 "$1 字符集需要设置为utf8"
+     exit 
+   fi
+
+}
+
+
+function check_port(){
+   num_port=0
+   num_port=`netstat -tunlp|grep -w $1|wc -l`
+   
+   if [ ${num_port} -ge 1 ]; then
+       echo_fun 3 "\n $1 端口已经被占用,请换个端口"
+       exit
+   else
+       echo_fun 2 "\n $1 端口未被占用"
+   fi
+
+
+}
+
+
+
+function is_first_install(){
+
+    cd ${env_path}
+    is_install=0
+    is_install=`ls -l -t  tmp/*.tmp|grep $1|head -n 1 |wc -l`
+    is_ok_num=$?
+    order_is_ok ${is_ok_num}
+    install_time=`ls -l -t  tmp/*.tmp|grep $1|head -n 1 |cut -d '.' -f2`
+    is_ok_num=$?
+    order_is_ok ${is_ok_num}
+
+    if [ ${is_install} -ge 1 ]; then
+       echo_fun 3 在 ${install_time} 时$2
+
+       read -p "是否继续执行该步骤[y/n]：" answer
+       if [ "${answer}"x = "n"x ];then
+              exit
+       fi
+
+       while [ "${answer}"x != "y"x -a "${answer}"x != "n"x ]; do
+            echo -e "\n"
+            read -p "输入错误,请重新输入[y/n]：" answer
+            if [ "${answer}"x = "n"x ];then
+              exit
+            fi
+        done
+    fi 
+}
+
+function is_first_install_alter(){
+
+    cd ${env_path}
+    is_install=`ls -l -t  tmp/*.tmp|grep $1|head -n 1 |wc -l`
+    is_ok_num=$?
+    order_is_ok ${is_ok_num}
+    install_time=`ls -l -t  tmp/*.tmp|grep $1|head -n 1 |cut -d '.' -f2`
+    is_ok_num=$?
+    order_is_ok ${is_ok_num}
+
+    if [ ${is_install} -ge 1 ]; then
+       echo_fun 3 在 ${install_time} 时$2
+
+       read -p "是否继续执行该步骤[y/n]：" answer
+       if [ "${answer}"x = "y"x ];then
+                $3
+                $4 $1
+        fi
+       while [ "${answer}"x != "y"x -a "${answer}"x != "n"x ]; do
+            echo -e "\n"
+            read -p "输入错误,请重新输入[y/n]：" answer
+            if [ "${answer}"x = "y"x ];then
+                $3
+                $4 $1
+            fi
+        done
+    else
+         $3
+         $4 $1
+    fi 
+}
+
+
+
+
+#检查python版本
+function check_python(){
+
+  echo_fun 4 安装 python3.5 和 pip,不会影响机器本身的 python 和 pip 环境
+  cd ${env_path}
+  rm -rf /usr/bin/python3
+  ln -s ${env_path}/python3/bin/python3   /usr/bin/python3
+  
+  is_ok_num=$?
+  order_is_ok ${is_ok_num}
+
+  if [ -d venv ];then
+    echo_fun 2 "\n venv虚拟环境已经创建，不需要再创建"
+  else 
+     echo_fun 4 创建虚拟环境,安装bi_ai的依赖包
+     sed  -i "1c #!${env_path}/python3/bin/python3" ${env_path}/python3/bin/pip3
+     is_ok_num=$?
+     order_is_ok ${is_ok_num}
+     
+     python3/bin/pip3 install -U rpm/virtualenv-16.4.3-py2.py3-none-any.whl
+     is_ok_num=$?
+     order_is_ok ${is_ok_num}
+     sleep 3s
+     cd ${env_path}/../
+     chown -R ${bi_user}.${bi_user} *
+      su - ${bi_user} <<EOF
+      cd ${env_path}
+      mkdir ./venv
+      python3/bin/virtualenv --system-site-packages -p python3/bin/python3 ./venv
+    
+      source ./venv/bin/activate
+      cd ${env_path}
+      echo -e "\033[36;40;1m 检查智能语义服务的依赖包是否安装,未安装则进行安装,第一次安装时间较长请耐心等待... \033[0m\r\n"
+      pip install --no-index --find-links=packages/ -r requirements.txt  
+    
+      deactivate
+EOF
+   fi
+  }
+
+
+
+function touch_stmp_file(){
+
+   cd ${env_path}
+   timestmp=`date "+%Y-%m-%d_%H:%M"`
+   touch tmp/$1.${timestmp}.tmp
+
+}
+
+
+# ------------------------------------------------第一步环境检查----------------------------------------------------
+
+function step_fun_1(){
+
+  
+    #创建一个判断是否安装过的tmp文件 
+    if [ ! -d ${env_path}/tmp ];then 
+       mkdir -p ${env_path}/tmp
+       touch ${env_path}/tmp/xx.tmp
+    fi
+    
+    check_package expect
+    check_package gcc
+    check_package gcc-c++
+    check_python
+    check_exist_user  ${bi_user} ${bi_passwd}
+    check_mysql  mysqld
+    
+    
+    echo_fun 4 "检查 BI-Service 后端服务端口 ${bi_service_port} 是否被占用"
+    check_port ${bi_service_port}
+
+     echo_fun 4 "检查 BI-Web 后端服务端口 ${bi_web_port} 是否被占用"
+    check_port ${bi_web_port}
+    
+    echo_fun 4 "检查 BI-AI 后端服务端口 ${bi_ai_port} 是否被占用"
+    check_port ${bi_ai_port}
+
+    echo_fun 2 "\n环境检查成功"
+    sleep 5s
+}
+
+
+# ------------------------------------------------第二步BI-Service部署----------------------------------------------------
+function check_chrome(){
+
+   echo_fun 4 "\n检查chrome指令执行情况"
+   cd  ${env_path}/../bi-service*/export/node_modules/puppeteer/.local-chromium/linux-637110/chrome-linux
+   chrome_num=0
+   chrome_num=`./chrome 2>&1 |awk 'NR==1{ gsub(/"/,""); print $6 }'|grep sandbox|wc -l`
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+    if [ ${chrome_num} -ge 1 ]; then
+       echo_fun 2 chrome指令执行成功
+       sleep 3s
+    else
+      echo_fun 3 chrome指令执行失败,安装依赖
+      echo_fun 5 "yum install libXScrnSaver* epel-release libappindicator-gtk3 libgconf*  pango* libnss3.so*  -y "
+      sleep 5s
+    fi 
+
+}
+
+
+function step_fun_2(){
+
+    message="已经解压,重复安装会覆盖之前的文件"
+    
+    is_first_install tar_bi_service ${message}
+
+    echo_fun 4 "\n解压 BI-Service 安装包并更改属主和属组权限"
+    sleep 4s
+    cd ${env_path}/../
+    tar -zxvf  bi-service-*.tar.gz 
+    is_ok_num=$?
+    order_is_ok ${is_ok_num}
+    
+    #更换license证书
+    cd bi-service*/conf/encrypt
+    rm -rf license_encrypted.txt
+
+    cd ${env_path}
+    cp -r license/license_encrypted.txt*   ${env_path}/../bi-service*/conf/encrypt/
+
+    #授权
+    cd ../
+    chown -R ${bi_user}.${bi_user}  bi-service*
+    is_ok_num=$?
+    order_is_ok ${is_ok_num}
+
+   
+    echo_fun 2 "\n成功解压 BI-Service 安装包并更改解压后目录的属主和属组权限"
+   
+    # 解压后就检查chrome指令是否可用
+    check_chrome
+    
+    touch_stmp_file  tar_bi_service    
+    sleep 5s
+} 
+
+
+# ------------------------------------------------第三步BI-Web前端部署--------------------------------------
+
+function step_fun_3(){
+
+    message="已经解压,重复安装会覆盖之前的文件"
+    is_first_install tar_bi_web ${message}
+
+    echo_fun 4 "\n解压BI-Web安装包并更改属主和属组权限"
+    sleep 4s
+    
+    cd ${env_path}/../
+    tar -zxvf bi-web*.tar.gz 
+    is_ok_num=$?
+    order_is_ok ${is_ok_num}
+    
+    #授权
+    chown -R ${bi_user}.${bi_user}  bi-web*
+    is_ok_num=$?
+    order_is_ok ${is_ok_num}
+    echo_fun 2 "\n成功解压 BI-Web 安装包并更改解压后目录的属主和属组权限"
+    
+    touch_stmp_file   tar_bi_web
+    sleep 5s
+}
+
+
+#------------------------------------------------第四步BI-Ai自动化部署----------------------------------------------------
+function step_fun_4(){
+
+   message="已经解压,重复安装会覆盖之前的文件"
+    is_first_install tar_bi_ai ${message}
+
+
+   echo_fun 4 解压 BI-AI 安装包并更改属主和属组权限
+   sleep 4s
+   cd ${env_path}/../
+   tar -zxvf  bi-ai*.tar.gz
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+ 
+   #授权
+   chown -R ${bi_user}.${bi_user}  bi-ai*
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+   echo_fun 2 "\n成功解压 BI-AI 安装包并更改解压后目录的属主和属组权限"
+
+   touch_stmp_file   tar_bi_ai
+   sleep 5s
+}
+
+
+#-----------------------------------------------第五步初始化数据库----------------------------------------------------
+function install_init_db(){
+
+    db_exist_num=0
+    
+    db_exist_num=`mysql  -u${mysql_user} -p${mysql_password} -e "show databases" 2>/dev/null|grep -w $1|wc -l` 
+    is_ok_num=$?
+    order_is_ok ${is_ok_num}
+    if [ ${db_exist_num} -ge 1 ]; then
+        echo_fun 2  $1 数据库已经存在,不再创建和初始化
+    else
+      echo_fun 4 "\n创建 $1 数据库"
+     
+      mysql  -u${mysql_user} -p${mysql_password} -e "CREATE DATABASE  $1 CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;flush privileges;" 2>/dev/null
+      is_ok_num=$?
+      order_is_ok ${is_ok_num}
+      echo_fun 2  $1 数据库创建成功
+      sleep 2s
+
+      #初始化数据库
+      echo_fun 4 "\n初始化 $1 数据库"
+      cd ${env_path}/../$2/
+      mysql -u${mysql_user} -p${mysql_password}  $1 <sql/$3.sql  2>/dev/null 
+      is_ok_num=$?
+      order_is_ok ${is_ok_num}
+      echo_fun 2  $1 数据库初始化成功
+      sleep 3s
+    fi
+}
+
+
+
+function step_fun_5(){
+
+    message="已经初始化过数据库脚本"
+    is_first_install  init_database  ${message}
+
+    #创建bi_meta数据库并初始化
+    install_init_db ${bi_meta_db} bi-service*   bi_meta     
+
+    #创建bi_storage数据库并初始化
+    install_init_db ${bi_storage_db} bi-service*  bi_storage
+
+    #创建bi_quartz数据库并初始化
+    install_init_db ${bi_quartz_db} bi-service*  bi_quartz
+ 
+    #创建bi_ai数据库并初始化
+    install_init_db ${bi_ai_db} bi-ai*  bi_ai
+
+
+    touch_stmp_file   init_database
+
+}
+
+
+
+
+#-------------------------------------------第六步配置文件的修改----------------------------------------------------
+
+#修改配置文件
+function alter_bi_service_config(){
+
+   #修改application.properties文件
+   echo_fun 4 "\n修改 BI-Service 的配置文件 application.properties"
+   sed -i 's/\(server.port=\)\S*/\1'"${bi_service_port}"'/' ${env_path}/../bi-service*/conf/application.properties
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+   echo_fun 2 "\n成功修改 application.properties 配置文件"
+   sleep 3s
+
+   #修改biz.properties文件
+   echo_fun 4 "\n修改 BI-Service 的配置文件 biz.properties"
+   sed -i 's/\(web.domain=\)\S*/\1http:\/\/'"${local_ip}"'/' ${env_path}/../bi-service*/conf/biz.properties
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+   sed -i 's/\(service.domain=\)\S*/\1'"${local_ip}"'/' ${env_path}/../bi-service*/conf/biz.properties
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+
+   
+   cd  ${env_path}/../
+   export_path1=`pwd`
+   cd ${export_path1}/bi-service*
+   export_path2=`pwd`
+   export_path=${export_path2}/export/screenshot.js
+   sed -i "s#export_path#${export_path}#" ${env_path}/../bi-service*/conf/biz.properties
+   is_ok_num=$?
+   node_path=${env_path}/node-v8.11.2-linux-x64/bin/node
+   sed -i "s#node_path#${node_path}#" ${env_path}/../bi-service*/conf/biz.properties
+
+   order_is_ok ${is_ok_num}
+   echo_fun 2 "\n成功修改 biz.properties 配置文件"
+   sleep 3s
+
+
+
+   #修改quartz.properties配置文件
+   echo_fun 4 "\n修改 BI-Service 的配置文件 quartz.properties"
+   sed -i 's/\(org.quartz.dataSource.qzDS.URL:\)\S*/\1jdbc:mysql:\/\/'"${mysql_url}"'\/'"${bi_quartz_db}"'/' ${env_path}/../bi-service*/conf/quartz.properties
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+   sed -i 's/\(org.quartz.dataSource.qzDS.user:\)\S*/\1'"${mysql_user}"'/' ${env_path}/../bi-service*/conf/quartz.properties
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+   sed -i 's/\(org.quartz.dataSource.qzDS.password:\)\S*/\1'"${mysql_password}"'/' ${env_path}/../bi-service*/conf/quartz.properties
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+   echo_fun 2 "\n成功修改 quartz.properties 配置文件"
+   sleep 3s
+
+
+
+
+   #修改postgresql.properties配置文件
+   echo_fun 4 "\n修改 BI-Service 的配置文件 db_metadata.properties"
+   sed -i 's/\(meta.jdbc.url=\)\S*/\1jdbc:mysql:\/\/'"${mysql_url}"'\/'"${bi_meta_db}"'/' ${env_path}/../bi-service*/conf/dao/db_metadata.properties
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+   sed -i 's/\(meta.jdbc.user=\)\S*/\1'"${mysql_user}"'/' ${env_path}/../bi-service*/conf/dao/db_metadata.properties
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+   sed -i 's/\(meta.jdbc.pass=\)\S*/\1'"${mysql_password}"'/' ${env_path}/../bi-service*/conf/dao/db_metadata.properties
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+   echo_fun 2 "\n成功修改 db_metadata.properties 配置文件"
+   sleep 3s
+
+
+   #修改storage.properties配置文件
+   echo_fun 4 "\n修改 BI-Service 的配置文件 storage.properties"
+   sed -i 's/\(jdbc.address=\)\S*/\1'"${mysql_url}"'/' ${env_path}/../bi-service*/conf/dao/storage.properties
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+   sed -i 's/\(jdbc.dbName=\)\S*/\1'"${bi_storage_db}"'/' ${env_path}/../bi-service*/conf/dao/storage.properties
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+   sed -i 's/\(jdbc.user=\)\S*/\1'"${mysql_user}"'/' ${env_path}/../bi-service*/conf/dao/storage.properties
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+   sed -i 's/\(jdbc.pass=\)\S*/\1'"${mysql_password}"'/' ${env_path}/../bi-service*/conf/dao/storage.properties
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+   echo_fun 2 "\n成功修改 storage.properties 配置文件"
+   sleep 3s
+
+   #修改text-service.properties配置文件
+   echo_fun 4 "\n修改 BI-Service 的配置文件 text-service.properties"
+   sed -i 's/\(text.url=\)\S*/\1http:\/\/'"${local_ip}":"${bi_ai_port}"'/' ${env_path}/../bi-service*/conf/text-service.properties
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+   echo_fun 2 "\n成功修改 text-service.properties 配置文件"
+   sleep 3s
+
+
+   #修改mail.properties配置文件
+   echo_fun 4 "\n修改 BI-Service 的配置文件 mail.properties"
+   sed -i 's/\(mail.protocol=\)\S*/\1'"${mail_protocol}"'/' ${env_path}/../bi-service*/conf/mail.properties
+   sed -i 's/\(mail.server.host=\)\S*/\1'"${mail_server_host}"'/' ${env_path}/../bi-service*/conf/mail.properties
+   sed -i 's/\(mail.server.port=\)\S*/\1'"${mail_server_port}"'/' ${env_path}/../bi-service*/conf/mail.properties
+   sed -i 's/\(mail.sender=\)\S*/\1'"${mail_sender}"'/' ${env_path}/../bi-service*/conf/mail.properties
+   sed -i 's/\(mail.passwd=\)\S*/\1'"${mail_passwd}"'/' ${env_path}/../bi-service*/conf/mail.properties
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+   echo_fun 2 "\n成功修改 mail.properties 配置文件"
+
+
+   #修改start.sh配置文件
+    echo_fun 4 "\n修改 BI-Service 的启动脚本 start.sh"
+    jdk_path=${env_path}/jdk1.8.0_131/bin/java
+    sed -i "s#javaPath#${jdk_path}#"  ${env_path}/../bi-service*/bin/start.sh
+    is_ok_num=$?
+    order_is_ok ${is_ok_num}
+    echo_fun 2 "\n成功修改 start.sh 启动脚本"
+
+}
+
+
+function alter_bi_web_config(){
+
+   #修改bi_web配置文件
+
+   echo_fun 4 "\n修改 BI-Web 的配置文件install.sh"
+   sed -i 's/\(baseUrl=\)\S*/\1http:\/\/'"${local_ip}:${bi_service_port}"'\/api\/subject/'  ${env_path}/../bi-web*/webapps/ROOT/install.sh
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+
+   sed -i 's/\(baseLogout=\)\S*/\1http:\/\/'"${local_ip}:${bi_service_port}"'\/api\/subject/'   ${env_path}/../bi-web*/webapps/ROOT/install.sh
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+
+   sed -i 's/\(home=\)\S*/\1http:\/\/'"${local_ip}"'/'  ${env_path}/../bi-web*/webapps/ROOT/install.sh
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+
+   sed -i 's/\(systemUrl=\)\S*/\1http:\/\/'"${local_ip}:${bi_service_port}"'\/api\/subject/'   ${env_path}/../bi-web*/webapps/ROOT/install.sh
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+ 
+   sed -i "s#bi_web_port#${bi_web_port}#" ${env_path}/../bi-web*/conf/server.xml 
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+
+   echo_fun 2 "\n成功修改 installsh 配置文件"
+   sleep 3s
+
+   cd ${env_path}/../bi-web*/webapps/ROOT/
+   sh install.sh
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+
+  
+   echo_fun 4 "\n修改 BI-Web 的配置文件启动脚本start.sh"
+   jdk_path=${env_path}/jdk1.8.0_131/bin/java
+   sed -i "s#javaPath#${jdk_path}#"  ${env_path}/../bi-service*/bin/start.sh
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+   echo_fun 2 "\n成功修改 start.sh 启动脚本"
+
+  
+   java_home=${env_path}/jdk1.8.0_131
+   jre_home=${env_path}/jdk1.8.0_131/jre
+
+   echo_fun 4 "\n修改 BI-Web 的配置文件catalina.sh"
+   sed -i "s#javaHome#${java_home}#"  ${env_path}/../bi-web*/bin/catalina.sh
+   sed -i "s#jreHome#${jre_home}#"  ${env_path}/../bi-web*/bin/catalina.sh
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+   echo_fun 2 "\n成功修改 catalina.sh 配置文件"
+
+
+   echo_fun 4 "\n修改 BI-Web 的配置文件启动脚本setclasspath.sh"
+   sed -i "s#javaHome#${java_home}#"  ${env_path}/../bi-web*/bin/setclasspath.sh
+   sed -i "s#jreHome#${jre_home}#"  ${env_path}/../bi-web*/bin/setclasspath.sh
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+   echo_fun 2 "\n成功修改 setclasspath.sh 配置文件"
+
+}
+
+
+function alter_bi_ai_config(){
+
+   echo_fun 4 "\n修改 BI-AI 的配置文件 config.cfg "
+   #修改配置文件db.cfg
+   sed -i 's/\(hosts = \)\S*/\1'"${mysql_url}"'/' ${env_path}/../bi-ai*/config.cfg
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+
+   sed -i 's/\(username = \)\S*/\1'"${mysql_user}"'/' ${env_path}/../bi-ai*/config.cfg
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+
+   sed -i 's/\(password = \)\S*/\1'"${mysql_password}"'/' ${env_path}/../bi-ai*/config.cfg
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+
+   sed -i 's/\(database = \)\S*/\1'"${bi_ai_db}"'/' ${env_path}/../bi-ai*/config.cfg
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+
+   sed -i 's/\(hosts=\)\S*/\1http:\/\/'"${local_ip}:${bi_service_port}"'\/api\/subject/' ${env_path}/../bi-ai*/config.cfg
+   is_ok_num=$?
+   order_is_ok ${is_ok_num}
+
+   echo_fun 2 "\n成功修改 config.cfg 配置文件"
+   sleep 3s
+
+
+}
+
+
+
+function step_fun_6(){
+
+
+   #修改配置文件
+   message="已经执行过修改BI-Service服务配置文件,继续执行会再次修改配置文件"
+ 
+   is_first_install_alter alter_bi_service ${message}  alter_bi_service_config  touch_stmp_file
+  
+
+   message="已经执行过修改BI-Web服务配置文件,继续执行会再次修改配置文件"
+   is_first_install_alter alter_bi_web ${message} alter_bi_web_config  touch_stmp_file
+   
+
+   message="已经执行过修改BI-AI服务配置文件,继续执行会再次修改配置文件"
+   is_first_install_alter alter_bi_ai ${message}   alter_bi_ai_config    touch_stmp_file
+   
+
+}
+
+
+
+#------------------------------------------------第七步启动服务----------------------------------------------------
+
+
+
+function start_bi_service(){
+   su - ${bi_user} <<EOF
+   cd ${env_path}/../bi-service*/bin
+   sh $1
+   sleep 2s
+EOF
+}
+
+
+function start_bi_web(){
+    echo_fun 4 "\n检查 bi-web 进程是否存在"
+    su - ${bi_user} <<EOF
+      cd ${env_path}/../bi-web*/bin
+      sh $1
+      sleep 2s
+EOF
+     
+}
+
+function start_bi_ai(){
+   
+   su - ${bi_user} <<EOF
+   cd ${env_path}
+   source ./venv/bin/activate
+   cd ${env_path}/../bi-ai*
+   sh $1 ${bi_ai_port}
+   sleep 2s
+   deactivate
+EOF
+
+}
+
+function check_and_start(){
+
+    echo_fun 4 "\n检查 $1 进程是否存在"
+    pid_num=0
+    pid_num=`ps -ef |grep -w $1|grep -v  grep|wc -l`
+    is_ok_num=$?
+    order_is_ok ${is_ok_num}
+    if [ ${pid_num} -ge 1 ]; then
+       echo_fun 2 "$1 进程已存在,不再重新启动"
+    else
+        echo_fun 4 "$1 进程不存在,启动服务"
+        $2 start.sh
+        is_ok_num=$?
+        order_is_ok ${is_ok_num}
+    fi
+
+}
+
+function step_fun_7(){
+# 启动bi-servcice
+check_and_start bi-service start_bi_service 
+
+# 启动bi-web
+check_and_start bi-web start_bi_web 
+
+# 启动bi-ai
+check_and_start bi_ai.rest_service start_bi_ai 
+
+sleep 3s
+echo_fun 2 "\n至此, BI 服务已经部署完成, 在浏览器中输入${local_ip}:${bi_web_port}进行访问"
+}
+
+
+
+yn='y'
+while [ "$yn" == "y" ];do 
+  echo_list
+  yn_install
+  echo ''
+  read -p '是否继续安装其他模块[y/n]:' yn
+  
+  while [ "${yn}"x != "y"x -a "${yn}"x != "n"x ]; do
+            echo -e "\n"
+            read -p "输入错误,请重新输入,是否继续安装其他模块[y/n]：" yn
+            if [ "$yn"x == "n"x ];then
+              exit
+            fi
+  done
+
+  echo ''
+done
