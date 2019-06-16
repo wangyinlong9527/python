@@ -10,6 +10,6 @@ message=$3 # 正文
 message-content-type=html -o message-charset=utf8 -v
 
 
-# 编辑完脚本，给上可执行权限，执行指令如下
+# 编辑完脚本，给上可执行权限，执行指令如下：
 chmod +x sendEmail.sh
 ./sendEmail.sh 327721596@qq.com subject message
