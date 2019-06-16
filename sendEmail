@@ -1,0 +1,15 @@
+#!/bin/bash
+
+from=xxxx.he@baifendian.com # 发件人地址
+to=$1 # 收件人地址
+smtp=smtp.xxxxxx.com:25 # smtp服务器
+subject=$2 # 主题
+password=*********** # 发件人密码
+message=$3 # 正文
+/opt/sendEmail-v1.56/sendEmail -f $from -t $to -s $smtp -u $subject -m $message -xu $from -xp $password -o
+message-content-type=html -o message-charset=utf8 -v
+
+
+# 编辑完脚本，给上可执行权限，执行指令如下
+chmod +x sendEmail.sh
+./sendEmail.sh 327721596@qq.com subject message
