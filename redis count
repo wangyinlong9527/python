@@ -1,0 +1,9 @@
+# 客户端连接方式
+redis-cli -h 172.21.120.11 -p 7000 -a ${password} -c
+
+# redis 连接所有实例
+redis-cli -u redis://172.21.120.11:7000,172.21.120.18:7000,172.21.115.133:7000,172.21.120.11:7001,172.21.120.18:7001,172.21.115.133:7001 -c -a ${password}
+
+
+# redis统计key的数量
+redis-cli  -h 192.168.52.128  -p 7000 -a ${password}-c  2>/dev/null cluster nodes| awk '{if($3=="master" || $3=="myself,master") print $2}'|awk -F '@' '{print $1}'|awk -F ':' '{system("redis-cli -h "$1" -p "$2" -a ifly -c 2>/dev/null info")}'|grep db0|awk -F ',' '{print $1}'|awk -F ':' '{print $2}'|awk -F '=' 'BEGIN{total=0}{total=total+$2}END{print total}'
